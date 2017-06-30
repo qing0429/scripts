@@ -18,7 +18,8 @@ def update_config(domain, ip):
     shutil.copy(CONFIG_PATH, CONFIG_BAK_PATH)#备份DNS配置文件
     with open(CONFIG_PATH, 'r') as f, open(TMP_CONFIG, 'w+') as tf:
         is_match = 'N'  # 记录是否匹配到以前解析过的域名
-        for line.strip() in f:
+        for line in f:
+            line = line.strip()
             match = re.search('\d+.\d+.\d+.\d+'.format(), line)  # 匹配域名解析内容
             if match:
                 L_domain, L_flag, L_record, L_ip = line.split()
@@ -64,10 +65,8 @@ def check_config(domain, ip):
                         is_success = "N"
                         rets['status'] = "failed"
                         rets['comments'] = 'restart named failed'
-                        logging.error("重启named失败, {}解析到{}操作未完成".format(L_domain, L_ip))
-                        
-
-        if is_success == "N":
+                        logging.error("重启named失败, {}解析到{}操作未完成".format(L_domain, L_ip))                       
+        if is_success == "N":  # 没有配上或者重启named服务失败，记录日志，设置status最后的值
             logging.error("{}解析到{}失败".format(domain, ip))
             rets['status'] = "failed"
     return json.dumps(rets)
