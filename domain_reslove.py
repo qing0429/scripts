@@ -11,67 +11,91 @@ import subprocess
 
 
 def update_config(domain, ip):
-    #备份DNS配置文件
-    shutil.copy(CONFIG_PATH, CONFIG_BAK_PATH)
+    """
+    1. 备份域名
+    2. 检查域名之前是否被解析过，并做相应的处理
+    """
+    shutil.copy(CONFIG_PATH, CONFIG_BAK_PATH)#备份DNS配置文件
     with open(CONFIG_PATH, 'r') as f, open(TMP_CONFIG, 'w+') as tf:
-        for line in f:
+        is_match = 'N'  # 记录是否匹配到以前解析过的域名
+        for line.strip() in f:
             match = re.search('\d+.\d+.\d+.\d+'.format(), line)  # 匹配域名解析内容
             if match:
                 L_domain, L_flag, L_record, L_ip = line.split()
                 match = re.match('{}$'.format(domain), L_domain)  # 匹配接收到的域名是否被解析过
                 if match:
-                    line = "{}        IN A        {}".format(domain, ip)
+                    is_match = 'Y'
+                    line = "{}        IN A        {}".format(domain, ip)  # 域名以前被即解析过，重新解析
                     logging.warn("域名{}之前被解析到{}, 现在重新解析为{}".format(domain, L_ip, ip))
                 else:
-                    line = "{}        IN A        {}".format(domain, ip)
-                    logging.info("域名{}已经解析到{}".format(domain, ip))
-            tf.write(line)
+                    is_match = 'N'
+            tf.write(line + '\n')
+        # 域名以前没有解析过    
+        if is_match == "N":
+            line = "{}        IN A        {}".format(domain, ip)
+            logging.info("域名{}已经解析到{}".format(domain, ip))
+            tf.write(line + '\n')
+
+        shutil.move(TMP_CONFIG, CONFIG_PATH)
 
 
-def check_config(domain, ip, rets):
-    rets = rets
+def check_config(domain, ip):
+    """
+    检查域名配置是否成功，并返回json类型的结果
+    """
+    rets = {}
+    is_success = "N"
     with open(CONFIG_PATH) as f:
         for line in f:
             match = re.search('\d+.\d+.\d+.\d+', line)
             if match:
-                L_domain, L_flag, L_record, L_ip = line.split()
+                L_domain, L_flag, L_record, L_ip = line.split()  # 格式 abc.123.abc IN A 10.10.10.10
                 if L_domain == domain and L_ip == ip:
                     logging.info("{}解析到{}完成".format(L_domain, L_ip))
-                    status = subprocess.Popen('systemctl restart named', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-                    if status == 0:
+                    #status = subprocess.Popen('systemctl restart named', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+                    status = subprocess.Popen('hostname -i', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+                    err_mesg_len = len(status.stderr.readlines())
+                    if err_mesg_len == 0:
+                        is_success = "Y"
                         logging.info("重启named完成")
                         rets['status'] = "success"
+                        rets['comments'] = '{} - {} reslove finished'.format(L_domain, L_ip)
                     else:
-                        logging.error("重启named失败")
+                        is_success = "N"
                         rets['status'] = "failed"
-                else:
-                    logging.error("{}解析到{}失败".format(L_domain, L_ip))
-                    rets['status'] = "failed"
-    return rets
+                        rets['comments'] = 'restart named failed'
+                        logging.error("重启named失败, {}解析到{}操作未完成".format(L_domain, L_ip))
+                        
+
+        if is_success == "N":
+            logging.error("{}解析到{}失败".format(domain, ip))
+            rets['status'] = "failed"
+    return json.dumps(rets)
 
 
 class TcpHandler(socketserver.BaseRequestHandler):
     """
-
+    1. 创建socket进程
+    2. 调用 update_config() 方法来修改named配置文件
+    3. 调用 check_config() 方法来获取配置结果
     """
     def handle(self):
         while True:
             try:
-                self.rets = {}
-                self.recv_data = self.request.recv(1024).strip()
-                if len(self.recv_data) == 0:break
-                logging.info("from {} recivied {}".format(self.client_address, self.recv_data))
-                self.data = json.loads(self.recv_data)
-                if 'domain' in self.data.keys() and 'ip' in self.data.keys():
+                self.data = self.request.recv(1024).strip()
+                if len(self.data) == 0:break   # 接收的数据长度为0是，断开本次连接
+                logging.info("from {} recivied {}".format(self.client_address, self.data))
+                self.data = json.loads(self.data.decode()) # 接收到json类型数据，转换为python字典类型
+                if 'domain' in self.data.keys() and 'ip' in self.data.keys(): # 判断接收的数据是否符合要求
                     self.domain = self.data['domain']
+                    self.domain = self.domain.split('.za-tech')[0]   # 取出.za-tech前边的部分
                     self.ip = self.data['ip']
-                    update_config(self.domain, self.ip)
-                    self.rets = check_config(self.domain, self.ip, self.rets)
+                    update_config(self.domain, self.ip)  # 调用方法修改配置文件
+                    self.rets = check_config(self.domain, self.ip)  # 获取修改配置文件操作的结果
                 else:
-                    logging.error("接受到的参数有错误{}".format(self.recv_data))
+                    logging.error("接受到的参数有错误{}".format(self.data))
                     self.rets['status'] = 'failed'
-                self.rets = json.dumps(self.rets)
-                self.request.send(self.rets.encode())
+                self.request.send(self.rets.encode()) # 返回给客户端json类型的数据，以UTF-8形式编码
             except ConnectionResetError as e:
                 logging.error("客户端断开连接",e)
 
