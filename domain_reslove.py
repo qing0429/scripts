@@ -6,7 +6,7 @@ import logging
 import json
 import datetime
 import shutil
-import re
+import re, os
 import subprocess
 
 
@@ -16,10 +16,10 @@ def update_config(domain, ip):
     2. 检查域名之前是否被解析过，并做相应的处理
     """
     shutil.copy(CONFIG_PATH, CONFIG_BAK_PATH)#备份DNS配置文件
-    with open(CONFIG_PATH, 'r') as f, open(TMP_CONFIG, 'w+') as tf:
+    logging.info("开始修改配置文件，domain={}, ip={}".format(domain, ip))
+    with open(CONFIG_PATH, 'r') as f, open(TMP_CONFIG_PATH, 'w+') as tf:
         is_match = 'N'  # 记录是否匹配到以前解析过的域名
         for line in f:
-            line = line.strip()
             match = re.search('\d+.\d+.\d+.\d+'.format(), line)  # 匹配域名解析内容
             if match:
                 L_domain, L_flag, L_record, L_ip = line.split()
@@ -30,14 +30,15 @@ def update_config(domain, ip):
                     logging.warn("域名{}之前被解析到{}, 现在重新解析为{}".format(domain, L_ip, ip))
                 else:
                     is_match = 'N'
-            tf.write(line + '\n')
+            tf.write(line)
         # 域名以前没有解析过    
         if is_match == "N":
             line = "{}        IN A        {}".format(domain, ip)
             logging.info("域名{}已经解析到{}".format(domain, ip))
             tf.write(line + '\n')
 
-        shutil.move(TMP_CONFIG, CONFIG_PATH)
+        shutil.move(TMP_CONFIG_PATH, CONFIG_PATH)
+        logging.info("DNS配置文件修改完成")
 
 
 def check_config(domain, ip):
@@ -46,6 +47,7 @@ def check_config(domain, ip):
     """
     rets = {}
     is_success = "N"
+    logging.info("检查修改结果")
     with open(CONFIG_PATH) as f:
         for line in f:
             match = re.search('\d+.\d+.\d+.\d+', line)
@@ -53,8 +55,7 @@ def check_config(domain, ip):
                 L_domain, L_flag, L_record, L_ip = line.split()  # 格式 abc.123.abc IN A 10.10.10.10
                 if L_domain == domain and L_ip == ip:
                     logging.info("{}解析到{}完成".format(L_domain, L_ip))
-                    #status = subprocess.Popen('systemctl restart named', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-                    status = subprocess.Popen('hostname -i', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+                    status = subprocess.Popen('systemctl restart named', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
                     err_mesg_len = len(status.stderr.readlines())
                     if err_mesg_len == 0:
                         is_success = "Y"
@@ -87,7 +88,7 @@ class TcpHandler(socketserver.BaseRequestHandler):
                 self.data = json.loads(self.data.decode()) # 接收到json类型数据，转换为python字典类型
                 if 'domain' in self.data.keys() and 'ip' in self.data.keys(): # 判断接收的数据是否符合要求
                     self.domain = self.data['domain']
-                    self.domain = self.domain.split('.za-tech')[0]   # 取出.za-tech前边的部分
+                    self.domain = self.domain.split('.test.za-tech')[0]   # 取出.za-tech前边的部分
                     self.ip = self.data['ip']
                     update_config(self.domain, self.ip)  # 调用方法修改配置文件
                     self.rets = check_config(self.domain, self.ip)  # 获取修改配置文件操作的结果
@@ -95,6 +96,7 @@ class TcpHandler(socketserver.BaseRequestHandler):
                     logging.error("接受到的参数有错误{}".format(self.data))
                     self.rets['status'] = 'failed'
                 self.request.send(self.rets.encode()) # 返回给客户端json类型的数据，以UTF-8形式编码
+                logging.info('返回值：{}'.format(self.rets))
             except ConnectionResetError as e:
                 logging.error("客户端断开连接",e)
 
@@ -104,11 +106,12 @@ if __name__ == '__main__':
                     datefmt='%a, %d %b %Y %H:%M:%S', filename='/var/log/domain_reslove.log', filemode='a')
     DATE = datetime.datetime.now().strftime('%Y%m%d')
     HOST, PORT = '0.0.0.0', 1024
-    # CONFIG_PATH = '/var/named/chroot/var/named/za-tech.net.zone'
-    # CONFIG_PATH = '/var/named/chroot/var/named/za-tech.net.zone.tmp'
-    # CONFIG_BAK_PATH = '/var/named/chroot/var/named/za-tech.net.zone.{}'.format(DATE)
-    CONFIG_PATH = '/root/named/za-tech.net.zone'
-    TMP_CONFIG = '/root/named/za-tech.net.zone.tmp'
-    CONFIG_BAK_PATH = '/root/named/za-tech.net.zone.{}'.format(DATE)
+    CONFIG_HOME = '/var/named/chroot/var/named'
+    CONFIG_PATH = os.path.join(CONFIG_HOME, 'za-tech.net.zone')
+    TMP_CONFIG_PATH = os.path.join(CONFIG_HOME, 'za-tech.net.zone.tmp')
+    CONFIG_BAK_PATH = os.path.join(CONFIG_HOME, 'backup', 'za-tech.net.zone.{}'.format(DATE))
+    # CONFIG_PATH = '/root/named/za-tech.net.zone'
+    # TMP_CONFIG_PATH = '/root/named/za-tech.net.zone.tmp'
+    # CONFIG_BAK_PATH = '/root/named/za-tech.net.zone.{}'.format(DATE)
     server = socketserver.TCPServer((HOST, PORT), TcpHandler)
     server.serve_forever()
